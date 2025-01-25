@@ -72,72 +72,83 @@ class HubThread:
 
     def process_block(self):
         """Process and log a 15-minute block of data"""
-        timestamp = datetime.now()
-        total_hub_usage = 0.0
-        device_logs = []
-
-        # Process each device
-        for device_id, tracker in self.devices.items():
-            # Get device data and power rating
-            device_data = self.db_manager.get_device(device_id)
-            if not device_data:
-                continue
-                
-            # Calculate power usage for this block
-            active_minutes = tracker.finalize_block()
-            power_rating = device_data.get("power_rating", 0)
-            power_usage = (power_rating * active_minutes) / 60  # Convert to watt-hours
-            
-            total_hub_usage += power_usage
-            device_logs.append({
-                "device_id": device_id,
-                "active_minutes": active_minutes,
-                "power_usage": power_usage
-            })
-
-        # Create hub log entry
-        hub_log = HubLog(
-            hub_id=self.hub_id,
-            timestamp=timestamp,
-            total_usage=total_hub_usage
-        )
-        self.sql_session.add(hub_log)
-        self.sql_session.flush()  # Get the hub_log id
-
-        # Create device log entries
-        for log in device_logs:
-            device_log = DeviceLog(
-                hub_log_id=hub_log.id,
-                device_id=log["device_id"],
-                active_minutes=log["active_minutes"],
-                power_usage=log["power_usage"]
-            )
-            self.sql_session.add(device_log)
-
-        # Commit all changes
-        self.sql_session.commit()
-
-        # Format timestamp to be Firebase path safe
-        firebase_timestamp = timestamp.strftime("%Y_%m_%d_%H_%M_%S")
-        
-        # Create a hub_logs collection for this hub if it doesn't exist
-        collection_path = f"hub_logs/{self.hub_id}/current_day"
-        block_data = {
-            "total_usage": total_hub_usage,
-            "timestamp": timestamp.isoformat(),  # Keep ISO format in the actual data
-            "devices": {
-                log["device_id"]: {
-                    "active_minutes": log["active_minutes"],
-                    "power_usage": log["power_usage"]
-                } for log in device_logs
-            }
-        }
-
-        # Update Firebase using a valid document ID
         try:
+            timestamp = datetime.now().replace(microsecond=0)  # Remove microseconds
+            total_hub_usage = 0.0
+            device_logs = []
+
+            # Process each device
+            for device_id, tracker in self.devices.items():
+                device_data = self.db_manager.get_device(device_id)
+                if not device_data:
+                    continue
+                    
+                active_minutes = tracker.finalize_block()
+                power_rating = device_data.get("power_rating", 0)
+                power_usage = (power_rating * active_minutes) / 60
+                
+                total_hub_usage += power_usage
+                device_logs.append({
+                    "device_id": device_id,
+                    "active_minutes": active_minutes,
+                    "power_usage": power_usage
+                })
+
+            # Check for existing log at this timestamp
+            existing_log = self.sql_session.query(HubLog).filter_by(
+                hub_id=self.hub_id, 
+                timestamp=timestamp
+            ).first()
+
+            if existing_log:
+                # Update existing log
+                existing_log.total_usage = total_hub_usage
+                # Delete existing device logs
+                self.sql_session.query(DeviceLog).filter_by(hub_log_id=existing_log.id).delete()
+                hub_log = existing_log
+            else:
+                # Create new hub log
+                hub_log = HubLog(
+                    hub_id=self.hub_id,
+                    timestamp=timestamp,
+                    total_usage=total_hub_usage
+                )
+                self.sql_session.add(hub_log)
+                
+            self.sql_session.flush()
+
+            # Create device log entries
+            for log in device_logs:
+                device_log = DeviceLog(
+                    hub_log_id=hub_log.id,
+                    device_id=log["device_id"],
+                    active_minutes=log["active_minutes"],
+                    power_usage=log["power_usage"]
+                )
+                self.sql_session.add(device_log)
+
+            # Commit all changes
+            self.sql_session.commit()
+
+            # Update Firebase
+            firebase_timestamp = timestamp.strftime("%Y_%m_%d_%H_%M_%S")
+            collection_path = f"hub_logs/{self.hub_id}/current_day"
+            block_data = {
+                "total_usage": total_hub_usage,
+                "timestamp": timestamp.isoformat(),
+                "devices": {
+                    log["device_id"]: {
+                        "active_minutes": log["active_minutes"],
+                        "power_usage": log["power_usage"]
+                    } for log in device_logs
+                }
+            }
+            
             self.db_manager.create_document(collection_path, firebase_timestamp, block_data)
+            
         except Exception as e:
-            print(f"Error updating Firebase: {e}")
+            print(f"Error processing block: {e}")
+            self.sql_session.rollback()
     
     def run(self):
         """Main loop for processing 15-minute blocks"""
