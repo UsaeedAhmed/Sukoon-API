@@ -19,14 +19,33 @@ class DatabaseManager:
     def __init__(self):
         """Initialize Firebase connection using environment variables."""
         if not hasattr(self, 'initialized'):
-            load_dotenv()
+            try:
+                load_dotenv()
+            except Exception:
+                pass
+            
+            # Function to clean private key
+            def clean_private_key(key):
+                if key:
+                    # Remove any surrounding quotes
+                    key = key.strip('"\'')
+                    # Replace literal \n with actual newlines
+                    key = key.replace('\\n', '\n')
+                    return key
+                return None
+            
+            # Get and clean private key first
+            private_key = clean_private_key(os.getenv("FIREBASE_PRIVATE_KEY"))
+            
+            if not private_key:
+                raise EnvironmentError("FIREBASE_PRIVATE_KEY is missing or invalid")
             
             # Load Firebase credentials from environment variables
             cred_dict = {
                 "type": os.getenv("FIREBASE_TYPE"),
                 "project_id": os.getenv("FIREBASE_PROJECT_ID"),
                 "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID"),
-                "private_key": os.getenv("FIREBASE_PRIVATE_KEY").replace('\\n', '\n'),
+                "private_key": private_key,  # Use cleaned key
                 "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
                 "client_id": os.getenv("FIREBASE_CLIENT_ID"),
                 "auth_uri": os.getenv("FIREBASE_AUTH_URI"),
@@ -35,13 +54,20 @@ class DatabaseManager:
                 "client_x509_cert_url": os.getenv("FIREBASE_CLIENT_CERT_URL")
             }
             
-            cred = credentials.Certificate(cred_dict)
-            firebase_admin.initialize_app(cred, {
-                'databaseURL': os.getenv("FIREBASE_DATABASE_URL")
-            })
+            # Debug line to check key format (comment out in production)
+            print("Private key start:", private_key[:40], "...")
             
-            self.db = db.reference()
-            self.initialized = True
+            try:
+                cred = credentials.Certificate(cred_dict)
+                firebase_admin.initialize_app(cred, {
+                    'databaseURL': os.getenv("FIREBASE_DATABASE_URL")
+                })
+                
+                self.db = db.reference()
+                self.initialized = True
+                print("Successfully initialized Firebase connection")
+            except Exception as e:
+                raise Exception(f"Failed to initialize Firebase: {str(e)}")
 
     def add_device(self, device_id: str, data: Dict[str, Any]) -> bool:
         """
