@@ -2,9 +2,14 @@ from fastapi import FastAPI, HTTPException, Depends, Header
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 import uvicorn
+import os
+from dotenv import load_dotenv
 
 from Utilities.manipulator import Manipulator
 from Utilities.database_manager import DatabaseManager
+
+# Load environment variables
+load_dotenv()
 
 app = FastAPI(title="Smart Home API")
 
@@ -12,8 +17,9 @@ app = FastAPI(title="Smart Home API")
 db_manager = DatabaseManager()
 manipulator = Manipulator()
 
-# Predefined API key for testing
-API_KEY = "test_api_key_123"
+
+# Get API key from environment variable
+API_KEY = os.getenv("API_KEY", "test_api_key_123")
 
 # Dependency for API key verification
 async def verify_api_key(x_api_key: str = Header(...)):
